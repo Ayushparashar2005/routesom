@@ -84,7 +84,7 @@ const App: React.FC = () => {
         
         // OPTIMIZATION: Calc next hop only when reaching a node.
         
-        return prevPackets.map(p => {
+        return prevPackets.map((p): Packet => {
              if (p.status !== 'moving') return p;
 
              let newProgress = p.progress + (p.speed * delta);

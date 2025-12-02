@@ -3,11 +3,10 @@ import { GraphData } from "../types";
 
 // Initialize Gemini Client
 // Requires process.env.API_KEY to be set
-const apiKey = process.env.API_KEY || '';
-const ai = new GoogleGenAI({ apiKey });
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const generateTopology = async (prompt: string): Promise<GraphData | null> => {
-  if (!apiKey) {
+  if (!process.env.API_KEY) {
     console.warn("Gemini API Key is missing.");
     return null;
   }
