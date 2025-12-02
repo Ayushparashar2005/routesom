@@ -287,7 +287,7 @@ const App: React.FC = () => {
         <div className="absolute top-0 left-0 right-0 p-6 pointer-events-none z-10 flex justify-between items-start">
             <div>
                 <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400 drop-shadow-sm">
-                RouteSim AI
+                RouteSim
                 </h1>
                 <p className="text-slate-400 text-sm mt-1 max-w-md">
                 Interactive simulation of {algorithm}. <br/>
