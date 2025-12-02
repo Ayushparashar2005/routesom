@@ -1,0 +1,5 @@
+{
+  "name": "RouteSim",
+  "description": "Interactive visual simulation of Dijkstra and Bellman-Ford routing algorithms with AI-powered topology generation.",
+  "requestFramePermissions": []
+}
