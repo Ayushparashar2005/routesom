@@ -9,7 +9,10 @@ interface NetworkGraphProps {
   width?: number;
   height?: number;
   editMode: boolean;
-  onNodeClick: (nodeId: string) => void;
+  startNodeId: string;
+  endNodeId: string | null;
+  highlightLinks: string[]; // IDs of links in the shortest path
+  onNodeClick: (nodeId: string, isShift: boolean) => void;
   onLinkClick: (linkId: string) => void;
 }
 
@@ -20,12 +23,14 @@ const NetworkGraph: React.FC<NetworkGraphProps> = ({
   width = 800, 
   height = 600,
   editMode,
+  startNodeId,
+  endNodeId,
+  highlightLinks,
   onNodeClick,
   onLinkClick
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const simulationRef = useRef<d3.Simulation<Node, Link> | null>(null);
-  // Keep track of internal simulation data state
   const [internalData, setInternalData] = useState<GraphData>({ nodes: [], links: [] });
 
   // Sync internal data with props
@@ -39,7 +44,7 @@ const NetworkGraph: React.FC<NetworkGraphProps> = ({
 
     setInternalData({ nodes: newNodes, links: newLinks });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data]); // Intentionally not including internalData to prevent loops
+  }, [data]);
 
   // Main D3 Rendering
   useEffect(() => {
@@ -80,11 +85,11 @@ const NetworkGraph: React.FC<NetworkGraphProps> = ({
 
     const linkLine = link.append("line")
       .attr("stroke-width", 3)
-      .attr("stroke", d => d.active ? "#475569" : "#991b1b") // Slate 600 vs Red 800
+      .attr("stroke", d => d.active ? "#475569" : "#991b1b")
       .attr("stroke-dasharray", d => d.active ? "none" : "5,5")
       .attr("opacity", d => d.active ? 1 : 0.4);
 
-    const linkClickArea = link.append("line") // Invisible thicker line for easier clicking
+    const linkClickArea = link.append("line") 
       .attr("stroke-width", 20)
       .attr("stroke", "transparent")
       .attr("cursor", editMode ? "pointer" : "default")
@@ -121,17 +126,28 @@ const NetworkGraph: React.FC<NetworkGraphProps> = ({
         .on("drag", dragged)
         .on("end", dragended));
 
+    // Node Circle
     const circle = node.append("circle")
       .attr("r", 24)
-      .attr("fill", d => d.active ? "#1e293b" : "#450a0a") // Slate 800 vs Red 950
-      .attr("stroke", d => d.active ? "#64748b" : "#ef4444") // Slate 500 vs Red 500
-      .attr("stroke-width", 2)
+      .attr("fill", d => {
+          if (!d.active) return "#450a0a";
+          if (d.id === startNodeId) return "#1e3a8a"; // Dark Blue for Start
+          if (d.id === endNodeId) return "#581c87"; // Purple for End
+          return "#1e293b";
+      }) 
+      .attr("stroke", d => {
+          if (!d.active) return "#ef4444";
+          if (d.id === startNodeId) return "#3b82f6"; // Bright Blue
+          if (d.id === endNodeId) return "#a855f7"; // Bright Purple
+          return "#64748b";
+      })
+      .attr("stroke-width", d => (d.id === startNodeId || d.id === endNodeId) ? 4 : 2)
       .attr("cursor", "pointer")
       .on("click", (event, d) => {
-        onNodeClick(d.id);
+        onNodeClick(d.id, event.shiftKey);
       });
 
-    // Icon/Label
+    // Node ID Label
     node.append("text")
       .text(d => d.id)
       .attr("text-anchor", "middle")
@@ -139,6 +155,25 @@ const NetworkGraph: React.FC<NetworkGraphProps> = ({
       .attr("fill", d => d.active ? "white" : "#fca5a5")
       .attr("font-weight", "bold")
       .attr("pointer-events", "none");
+
+    // Start/End Badges
+    node.filter(d => d.id === startNodeId || d.id === endNodeId)
+        .append("rect")
+        .attr("x", -18)
+        .attr("y", -40)
+        .attr("width", 36)
+        .attr("height", 14)
+        .attr("rx", 4)
+        .attr("fill", d => d.id === startNodeId ? "#3b82f6" : "#a855f7");
+        
+    node.filter(d => d.id === startNodeId || d.id === endNodeId)
+        .append("text")
+        .text(d => d.id === startNodeId ? "START" : "END")
+        .attr("text-anchor", "middle")
+        .attr("dy", -30)
+        .attr("font-size", "9px")
+        .attr("font-weight", "bold")
+        .attr("fill", "white");
 
     // Failure icon overlay if inactive
     node.append("text")
@@ -151,11 +186,12 @@ const NetworkGraph: React.FC<NetworkGraphProps> = ({
       .attr("opacity", d => d.active ? 0 : 1)
       .attr("pointer-events", "none");
 
+    // Distance Label
     const distanceLabel = node.append("text")
         .attr("class", "dist-label")
         .attr("text-anchor", "middle")
-        .attr("dy", -35)
-        .attr("fill", "#38bdf8") // Sky blue
+        .attr("dy", 40)
+        .attr("fill", "#38bdf8") 
         .attr("font-size", "12px")
         .attr("font-weight", "bold")
         .text("");
@@ -211,26 +247,15 @@ const NetworkGraph: React.FC<NetworkGraphProps> = ({
     return () => {
       simulation.stop();
     };
-  }, [internalData, width, height, editMode]); // Intentionally limited deps to avoid redraws on packets
+  }, [internalData, width, height, editMode, startNodeId, endNodeId]); 
 
-  // Separate Effect for Highlighting Active Algorithm Steps
+  // --- Effects for Algorithm State Visualization ---
+
   useEffect(() => {
     if (!svgRef.current || !currentStep) return;
-
     const svg = d3.select(svgRef.current);
 
-    // Update Node Styles
-    svg.selectAll<SVGCircleElement, Node>(".nodes circle")
-      .transition().duration(200)
-      .attr("fill", d => {
-        if (!d.active) return "#450a0a";
-        if (currentStep.activeNodes.includes(d.id)) return "#eab308"; // Yellow
-        if (currentStep.visitedNodes.includes(d.id)) return "#22c55e"; // Green
-        return "#1e293b";
-      })
-      .attr("r", d => currentStep.activeNodes.includes(d.id) ? 30 : 24);
-
-    // Update Labels
+    // Update Distance Labels
     svg.selectAll<SVGTextElement, Node>(".dist-label")
         .text(d => {
             if (!d.active) return "OFF";
@@ -238,28 +263,63 @@ const NetworkGraph: React.FC<NetworkGraphProps> = ({
             return dist === undefined || dist >= 9999 ? '∞' : dist.toString();
         });
 
+    // Update Nodes Processing Colors (Yellow/Green)
+    svg.selectAll<SVGCircleElement, Node>(".nodes circle")
+      .transition().duration(200)
+      .attr("fill", d => {
+        if (!d.active) return "#450a0a";
+        if (d.id === startNodeId) return "#1e3a8a";
+        if (d.id === endNodeId) return "#581c87";
+        if (currentStep.activeNodes.includes(d.id)) return "#eab308"; // Processing
+        if (currentStep.visitedNodes.includes(d.id)) return "#064e3b"; // Visited (Dark Green)
+        return "#1e293b"; 
+      })
+      .attr("stroke", d => {
+        if (!d.active) return "#ef4444";
+        if (currentStep.activeNodes.includes(d.id)) return "#facc15";
+        if (currentStep.visitedNodes.includes(d.id)) return "#22c55e";
+        if (d.id === startNodeId) return "#3b82f6";
+        if (d.id === endNodeId) return "#a855f7";
+        return "#64748b";
+      });
+
     // Update Links
     svg.selectAll<SVGLineElement, Link>(".links line")
-      .filter(function() { return this.getAttribute("stroke") !== "transparent" }) // Filter out click areas
+      .filter(function() { return this.getAttribute("stroke") !== "transparent" })
       .transition().duration(200)
       .attr("stroke", d => {
         if (!d.active) return "#991b1b";
-        if (currentStep.activeLinks.includes(d.id)) return "#facc15"; // Yellow Active
         
-        // Highlight Path in Algo view
+        // Priority 1: Highlighting the final calculated shortest path
+        if (highlightLinks.includes(d.id)) return "#a855f7"; // Purple/Pink Neon
+
+        // Priority 2: Currently active in algorithm
+        if (currentStep.activeLinks.includes(d.id)) return "#facc15"; // Yellow
+        
+        // Priority 3: Part of the tree discovered so far (algorithm trace)
         const s = (d.source as Node);
         const t = (d.target as Node);
-        // Check if this link is part of the 'previous' tree
         if ((currentStep.previous[t.id] === s.id) || (currentStep.previous[s.id] === t.id)) {
-             return "#3b82f6"; // Blue Path
+             return "#3b82f6"; // Blue Tree
         }
         return "#475569";
       })
-      .attr("stroke-width", d => currentStep.activeLinks.includes(d.id) ? 4 : 3);
+      .attr("stroke-width", d => {
+          if (highlightLinks.includes(d.id)) return 6;
+          if (currentStep.activeLinks.includes(d.id)) return 4;
+          return 3;
+      })
+      .attr("opacity", d => {
+          if (highlightLinks.includes(d.id)) return 1;
+          if (!d.active) return 0.4;
+          // Dim other links slightly if we have a specific target path
+          if (highlightLinks.length > 0 && !currentStep.activeLinks.includes(d.id)) return 0.2;
+          return 1;
+      });
 
-  }, [currentStep, internalData]);
+  }, [currentStep, internalData, highlightLinks, startNodeId, endNodeId]);
 
-  // Separate Effect for Traffic Packets (High Frequency)
+  // --- Effect for Traffic Packets ---
   useEffect(() => {
     if (!svgRef.current) return;
     const svg = d3.select(svgRef.current);
@@ -272,49 +332,40 @@ const NetworkGraph: React.FC<NetworkGraphProps> = ({
 
     const packetEnter = packetSelection.enter().append("circle")
         .attr("r", 6)
-        .attr("fill", "#06b6d4") // Cyan
+        .attr("fill", "#06b6d4")
         .attr("stroke", "#fff")
         .attr("stroke-width", 2);
 
-    // Update positions
     packetSelection.merge(packetEnter as any)
         .attr("cx", d => {
             const link = internalData.links.find(l => l.id === d.currentEdgeId);
             if (!link) return 0;
             const src = link.source as Node;
             const tgt = link.target as Node;
-            // Determine direction based on where packet came from
-            
-            let x1 = src.x!;
-            let x2 = tgt.x!;
-            
-            if (d.currentNodeId === tgt.id) {
-                 return x2 + (x1 - x2) * d.progress;
-            } else {
-                 return x1 + (x2 - x1) * d.progress;
-            }
+            let x1 = src.x!, x2 = tgt.x!;
+            return d.currentNodeId === tgt.id ? x2 + (x1 - x2) * d.progress : x1 + (x2 - x1) * d.progress;
         })
         .attr("cy", d => {
              const link = internalData.links.find(l => l.id === d.currentEdgeId);
             if (!link) return 0;
             const src = link.source as Node;
             const tgt = link.target as Node;
-            let y1 = src.y!;
-            let y2 = tgt.y!;
-            
-             if (d.currentNodeId === tgt.id) {
-                 return y2 + (y1 - y2) * d.progress;
-            } else {
-                 return y1 + (y2 - y1) * d.progress;
-            }
+            let y1 = src.y!, y2 = tgt.y!;
+            return d.currentNodeId === tgt.id ? y2 + (y1 - y2) * d.progress : y1 + (y2 - y1) * d.progress;
         });
-
   }, [packets, internalData]);
 
   return (
     <div className="w-full h-full bg-slate-900 rounded-xl overflow-hidden shadow-2xl border border-slate-800 relative">
-        <div className="absolute top-4 left-4 z-10 bg-slate-800/80 backdrop-blur px-3 py-1 rounded-md text-slate-300 text-xs font-mono border border-slate-700 pointer-events-none">
-            {editMode ? "EDIT MODE: Click Nodes to Toggle | Click Weights to Edit" : "Click Node to Set Start"}
+        <div className="absolute top-4 left-4 z-10 bg-slate-800/90 backdrop-blur px-3 py-2 rounded-md text-slate-300 text-xs font-mono border border-slate-700 pointer-events-none shadow-lg">
+            {editMode ? (
+                "EDIT MODE: Click Nodes to Toggle | Click Weights to Edit"
+            ) : (
+                <>
+                <div>Click Node = Set Start <span className="text-blue-400 font-bold">●</span></div>
+                <div>Shift + Click = Set End <span className="text-purple-400 font-bold">●</span></div>
+                </>
+            )}
         </div>
       <svg ref={svgRef} width={width} height={height} className="w-full h-full block" />
     </div>

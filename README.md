@@ -28,20 +28,27 @@ In the field of Computer Networks, understanding how routers make decisions is f
 1.  **Visual execution** of algorithms step-by-step.
 2.  **Real-time traffic simulation** where packets physically move across the graph based on calculated routes.
 3.  **Generative capability**, allowing users to describe a network (e.g., "A hub-and-spoke network with 10 nodes") and have AI build it instantly.
+4.  **Performance Benchmarking**, allowing comparison of algorithm execution time and efficiency.
 
 ---
 
 ## ✨ Key Features
 
 -   **Dual Algorithm Support:** Switch seamlessly between **Dijkstra** (Shortest Path First) and **Bellman-Ford**.
+-   **Targeted Pathfinding:**
+    -   **Start Node:** Click any node to set it as the source.
+    -   **End Node:** **Shift + Click** any node to set it as the destination.
+    -   **Visual Path:** The specific shortest path is highlighted in neon purple.
+-   **Performance Metrics:**
+    -   **Compute Time:** Precise measurement (in ms) of the raw algorithm execution time.
+    -   **Operations:** Track the total number of logical steps required for convergence.
 -   **AI-Powered Topology:** Integration with Google Gemini (`gemini-2.5-flash`) to generate complex JSON graph structures from natural language prompts.
--   **Interactive Graph:** Drag nodes to rearrange the topology. Click nodes to set start points.
+-   **Interactive Graph:** Drag nodes to rearrange the topology.
 -   **Failure Simulation (Edit Mode):**
     -   Disable/Enable Nodes to simulate hardware failure.
     -   Sever Links to simulate cable cuts.
     -   Modify Link Weights dynamically to test cost changes.
 -   **Traffic Layer:** Visual data packets traverse the network. Packets are "lost" if links fail mid-transit, or rerouted if the table updates.
--   **Step-by-Step Playback:** Control the speed of the algorithm, pause, rewind, and inspect the state at every iteration.
 -   **Live Routing Table:** A dynamic dashboard showing distances, previous hops, and active algorithm states.
 
 ---
@@ -133,9 +140,10 @@ Follow these steps to get the project running locally.
 ## 🎮 Usage Guide
 
 1.  **Simulation Mode (Default):**
-    -   Select an algorithm (Dijkstra or Bellman-Ford).
-    -   Click the **Play** button to watch the algorithm explore the graph.
-    -   Observe the **Routing Table** updating in real-time.
+    -   **Set Start Node:** Simply Click on any node.
+    -   **Set Target Node:** Hold **Shift** and Click on any node.
+    -   **Controls:** Use Play/Pause/Next/Prev to watch the algorithm explore the graph step-by-step.
+    -   **Metrics:** Check the right sidebar for "Compute Time" to see how fast the algorithm ran.
 
 2.  **Edit Mode:**
     -   Click the **Settings/Edit Graph** button.

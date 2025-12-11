@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Play, Pause, SkipForward, SkipBack, RotateCcw, Brain, Check, Loader2, Settings, Send } from 'lucide-react';
+import { Play, Pause, SkipForward, SkipBack, RotateCcw, Brain, Check, Loader2, Settings, Send, Clock } from 'lucide-react';
 import { AlgorithmType } from '../types';
 
 interface ControlPanelProps {
@@ -53,6 +53,10 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     }
   };
 
+  // Calculate visual time
+  const currentTime = (currentStepIndex * playbackSpeed) / 1000;
+  const totalTime = ((totalSteps > 0 ? totalSteps - 1 : 0) * playbackSpeed) / 1000;
+
   return (
     <div className="bg-slate-800 border-t border-slate-700 p-4 flex flex-col gap-4 shadow-lg z-20">
       
@@ -101,7 +105,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 className="flex items-center gap-1 px-3 py-1.5 bg-cyan-600/20 text-cyan-300 border border-cyan-500/50 hover:bg-cyan-600/40 rounded-md text-xs transition-colors"
              >
                 <Send size={14} />
-                <span>Send Traffic ({packetCount})</span>
+                <span>Packets ({packetCount})</span>
              </button>
         </div>
       </div>
@@ -170,12 +174,21 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         </div>
       </div>
         
-        {/* Progress Bar */}
-        <div className="w-full h-1 bg-slate-700 rounded-full overflow-hidden">
-            <div 
-                className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300"
-                style={{ width: `${totalSteps > 1 ? (currentStepIndex / (totalSteps - 1)) * 100 : 0}%` }}
-            />
+        {/* Progress Bar & Timer */}
+        <div className="flex flex-col gap-1">
+             <div className="w-full h-1 bg-slate-700 rounded-full overflow-hidden">
+                <div 
+                    className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300"
+                    style={{ width: `${totalSteps > 1 ? (currentStepIndex / (totalSteps - 1)) * 100 : 0}%` }}
+                />
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono mt-1">
+                 <div className="flex items-center gap-1">
+                     <Clock size={10} />
+                     <span>{currentTime.toFixed(1)}s</span>
+                 </div>
+                 <span>{totalTime.toFixed(1)}s</span>
+            </div>
         </div>
     </div>
   );

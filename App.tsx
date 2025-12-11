@@ -1,23 +1,27 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import NetworkGraph from './components/NetworkGraph';
 import ControlPanel from './components/ControlPanel';
 import RoutingTable from './components/RoutingTable';
 import { GraphData, AlgorithmType, SimulationStep, Packet, Node, Link } from './types';
-import { INITIAL_GRAPH } from './constants';
+import { INITIAL_GRAPH, INFINITY } from './constants';
 import { runAlgorithm } from './utils/algorithms';
 import { generateTopology } from './services/geminiService';
-import { Terminal, Info, Zap } from 'lucide-react';
+import { Terminal, Info, Zap, Timer, Flag } from 'lucide-react';
 
 const App: React.FC = () => {
   // Graph State
   const [graphData, setGraphData] = useState<GraphData>(INITIAL_GRAPH);
   const [startNode, setStartNode] = useState<string>('A');
+  const [endNode, setEndNode] = useState<string | null>(null);
   const [editMode, setEditMode] = useState<boolean>(false);
   
   // Algorithm State
   const [algorithm, setAlgorithm] = useState<AlgorithmType>(AlgorithmType.DIJKSTRA);
   const [steps, setSteps] = useState<SimulationStep[]>([]);
   const [currentStepIndex, setCurrentStepIndex] = useState<number>(0);
+  
+  // Performance Metrics
+  const [computeTime, setComputeTime] = useState<number>(0);
   
   // Traffic State
   const [packets, setPackets] = useState<Packet[]>([]);
@@ -31,16 +35,62 @@ const App: React.FC = () => {
   const timerRef = useRef<number | null>(null);
 
   // --- Algorithm Execution ---
-  // Re-run algorithm whenever graph, algorithm type, or start node changes
   useEffect(() => {
+    const start = performance.now();
     const newSteps = runAlgorithm(algorithm, graphData, startNode);
+    const end = performance.now();
+    
+    setComputeTime(end - start);
     setSteps(newSteps);
-    // If graph changed structurally, reset index, otherwise try to keep it if valid
-    // For simplicity, reset on major changes
+    
     if (currentStepIndex >= newSteps.length) {
         setCurrentStepIndex(newSteps.length - 1);
     }
   }, [graphData, algorithm, startNode]);
+
+  // --- Derived State: Shortest Path to End Node ---
+  const currentStep = steps[currentStepIndex] || null;
+
+  const shortestPathData = useMemo(() => {
+    if (!endNode || !currentStep) return { cost: 0, pathIds: [], pathString: '' };
+
+    const cost = currentStep.distances[endNode];
+    if (cost === undefined || cost >= INFINITY) {
+        return { cost: '∞', pathIds: [], pathString: 'Unreachable' };
+    }
+
+    // Reconstruct Path
+    const pathIds: string[] = []; // Link IDs
+    const nodePath: string[] = [endNode];
+    let curr = endNode;
+    const prevMap = currentStep.previous;
+    
+    let safety = 0;
+    while (curr !== startNode && safety < graphData.nodes.length) {
+        const prev = prevMap[curr];
+        if (!prev) break;
+
+        // Find link connecting prev and curr
+        const link = graphData.links.find(l => {
+            const s = typeof l.source === 'string' ? l.source : l.source.id;
+            const t = typeof l.target === 'string' ? l.target : l.target.id;
+            return (s === prev && t === curr) || (s === curr && t === prev);
+        });
+
+        if (link) pathIds.push(link.id);
+        nodePath.unshift(prev);
+        curr = prev;
+        safety++;
+    }
+
+    return { 
+        cost, 
+        pathIds, 
+        pathString: nodePath.join(' → ') 
+    };
+
+  }, [currentStep, endNode, graphData, startNode]);
+
 
   // --- Playback Timer ---
   useEffect(() => {
@@ -67,22 +117,11 @@ const App: React.FC = () => {
   // --- Packet Simulation Loop ---
   const updatePackets = (timestamp: number) => {
      if (!lastPacketUpdate.current) lastPacketUpdate.current = timestamp;
-     const delta = (timestamp - lastPacketUpdate.current) / 1000; // seconds
+     const delta = (timestamp - lastPacketUpdate.current) / 1000;
      lastPacketUpdate.current = timestamp;
 
      setPackets(prevPackets => {
         if (prevPackets.length === 0) return [];
-        
-        // We need the routing table to know where to go. 
-        // We use the *final* result of the routing algorithm for the current graph state
-        // To allow packets to react to the *current* simulation step, we could use steps[currentStepIndex]
-        // But in reality, packets route based on the router's current table.
-        // Let's use the Routing Table from the calculated steps.
-        // Since steps are re-calc'd on graph change, 'steps[steps.length-1]' is the converged table.
-        // However, we need the table for *every* node as a source, not just 'startNode' state variable.
-        // This is expensive to calc every frame.
-        
-        // OPTIMIZATION: Calc next hop only when reaching a node.
         
         return prevPackets.map((p): Packet => {
              if (p.status !== 'moving') return p;
@@ -90,49 +129,35 @@ const App: React.FC = () => {
              let newProgress = p.progress + (p.speed * delta);
              
              if (newProgress >= 1) {
-                 // Packet reached the end of the edge (reached nextHop)
                  const arrivedNodeId = p.nextHopId!;
                  
                  if (arrivedNodeId === p.targetId) {
                      return { ...p, progress: 1, status: 'delivered', currentEdgeId: null, currentNodeId: arrivedNodeId };
                  }
 
-                 // Route from arrivedNodeId to targetId
-                 // We need to know which neighbor is the next best hop.
-                 // We can run a quick Dijkstra from arrivedNodeId OR use the existing table if we treated startNode dynamic.
-                 // For true routing, every node needs a table.
-                 // Let's run a single-source dijkstra for this packet's current location *on demand*.
-                 // This is okay for a few packets.
-                 
-                 // Run algorithm from current location
+                 // On-demand routing for packet
                  const routeSteps = runAlgorithm(algorithm, graphData, arrivedNodeId);
                  const convergedStep = routeSteps[routeSteps.length - 1];
                  
-                 // Backtrack from target to find the first hop from source
                  let nextHop = null;
                  let curr: string | null = p.targetId;
                  
-                 // Safety check: is target reachable?
-                 if (convergedStep.distances[p.targetId] >= 9999) {
+                 if (convergedStep.distances[p.targetId] >= INFINITY) {
                      return { ...p, status: 'lost', progress: 1 };
                  }
 
-                 // Trace back: Target <- Prev <- ... <- NextHop <- CurrentNode
                  const path = [];
                  while (curr && curr !== arrivedNodeId) {
                      path.push(curr);
                      curr = convergedStep.previous[curr];
                  }
                  
-                 // If path has items, the last item is the immediate neighbor of arrivedNodeId
                  if (path.length > 0) {
                      nextHop = path[path.length - 1];
                  } else {
-                     // Should not happen if reachable and not same node
                      return { ...p, status: 'lost' };
                  }
 
-                 // Find link
                  const link = graphData.links.find(l => {
                      const s = typeof l.source === 'string' ? l.source : l.source.id;
                      const t = typeof l.target === 'string' ? l.target : l.target.id;
@@ -163,12 +188,11 @@ const App: React.FC = () => {
   useEffect(() => {
     const handle = requestAnimationFrame(updatePackets);
     return () => cancelAnimationFrame(handle);
-  }, [graphData, algorithm]); // Re-bind when graph changes to use fresh graphData in closure
+  }, [graphData, algorithm]);
 
   // --- Handlers ---
 
   const handleSendTraffic = () => {
-    // Generate 5 random packets
     const newPackets: Packet[] = [];
     const activeNodes = graphData.nodes.filter(n => n.active);
     
@@ -184,13 +208,11 @@ const App: React.FC = () => {
         const src = activeNodes[srcIndex];
         const tgt = activeNodes[tgtIndex];
         
-        // Initial Routing Calculation
         const routeSteps = runAlgorithm(algorithm, graphData, src.id);
         const converged = routeSteps[routeSteps.length - 1];
         
-        if (converged.distances[tgt.id] >= 9999) continue; // Unreachable
+        if (converged.distances[tgt.id] >= INFINITY) continue;
         
-        // Find first hop
         let nextHop = null;
         let curr: string | null = tgt.id;
         const path = [];
@@ -215,7 +237,7 @@ const App: React.FC = () => {
                 currentNodeId: src.id,
                 nextHopId: nextHop,
                 progress: 0,
-                speed: 0.5 + Math.random() * 0.5, // Random speed
+                speed: 0.5 + Math.random() * 0.5,
                 status: 'moving'
             });
         }
@@ -223,19 +245,22 @@ const App: React.FC = () => {
     setPackets(prev => [...prev, ...newPackets]);
   };
 
-  const handleNodeClick = (nodeId: string) => {
+  const handleNodeClick = (nodeId: string, isShift: boolean) => {
     if (editMode) {
-        // Toggle Active Status
         setGraphData(prev => ({
             ...prev,
             nodes: prev.nodes.map(n => n.id === nodeId ? { ...n, active: !n.active } : n),
-            // Optionally deactivate connected links if node dies? 
-            // The algorithm handles it, but visually cleaner if links stay but node is X'd
         }));
     } else {
-        setStartNode(nodeId);
-        setCurrentStepIndex(0);
-        setIsPlaying(false);
+        if (isShift) {
+            setEndNode(prev => prev === nodeId ? null : nodeId); // Toggle if same
+        } else {
+            setStartNode(nodeId);
+            setCurrentStepIndex(0);
+            setIsPlaying(false);
+            // If new start is same as end, clear end
+            if (nodeId === endNode) setEndNode(null);
+        }
     }
   };
 
@@ -261,22 +286,20 @@ const App: React.FC = () => {
     setIsGenerating(true);
     const newGraph = await generateTopology(prompt);
     if (newGraph) {
-      // Ensure active flags are set
       newGraph.nodes = newGraph.nodes.map(n => ({ ...n, active: true }));
       newGraph.links = newGraph.links.map(l => ({ ...l, active: true }));
       
       setGraphData(newGraph);
       if (newGraph.nodes.length > 0) {
         setStartNode(newGraph.nodes[0].id);
+        setEndNode(null); // Reset target
       }
-      setPackets([]); // Clear packets on new graph
+      setPackets([]);
     } else {
-        alert("Could not generate topology. Please try a different prompt or check API Key.");
+        alert("Could not generate topology. Please try a different prompt.");
     }
     setIsGenerating(false);
   };
-
-  const currentStep = steps[currentStepIndex] || null;
 
   return (
     <div className="flex h-screen bg-slate-950 text-white overflow-hidden font-sans">
@@ -289,10 +312,23 @@ const App: React.FC = () => {
                 <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400 drop-shadow-sm">
                 RouteSim
                 </h1>
-                <p className="text-slate-400 text-sm mt-1 max-w-md">
-                Interactive simulation of {algorithm}. <br/>
-                Current Start Node: <span className="text-white font-bold">{startNode}</span>
-                </p>
+                <div className="text-slate-400 text-sm mt-1 flex flex-col gap-1">
+                    <div>
+                        Interactive simulation of {algorithm}.
+                    </div>
+                    <div className="flex items-center gap-3 mt-1">
+                         <div className="flex items-center gap-1 bg-blue-900/40 px-2 py-1 rounded border border-blue-500/30">
+                            <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                            <span>Start: <span className="font-bold text-white">{startNode}</span></span>
+                         </div>
+                         {endNode && (
+                             <div className="flex items-center gap-1 bg-purple-900/40 px-2 py-1 rounded border border-purple-500/30">
+                                <span className="w-2 h-2 rounded-full bg-purple-500"></span>
+                                <span>End: <span className="font-bold text-white">{endNode}</span></span>
+                            </div>
+                         )}
+                    </div>
+                </div>
             </div>
             {packets.length > 0 && (
                 <div className="bg-cyan-900/50 border border-cyan-500/30 px-3 py-1 rounded text-cyan-200 text-xs flex items-center gap-2">
@@ -311,6 +347,9 @@ const App: React.FC = () => {
             width={window.innerWidth - 400} 
             height={window.innerHeight}
             editMode={editMode}
+            startNodeId={startNode}
+            endNodeId={endNode}
+            highlightLinks={shortestPathData.pathIds}
             onNodeClick={handleNodeClick}
             onLinkClick={handleLinkClick}
           />
@@ -320,13 +359,55 @@ const App: React.FC = () => {
       {/* Sidebar / Right Panel */}
       <div className="w-[400px] bg-slate-900 border-l border-slate-800 flex flex-col shadow-2xl z-30">
         
+        {/* Metric Dashboard */}
+        <div className="p-4 border-b border-slate-800 bg-slate-900/50">
+            <div className="flex items-center gap-2 mb-3 text-emerald-400">
+                <Timer size={18} />
+                <h2 className="font-semibold text-sm uppercase tracking-wider">Algorithm Metrics</h2>
+            </div>
+            <div className="grid grid-cols-2 gap-3 mb-3">
+                <div className="bg-slate-800 p-2 rounded border border-slate-700">
+                    <div className="text-[10px] text-slate-500 uppercase font-semibold">Compute Time</div>
+                    <div className="text-lg font-mono text-white flex items-baseline gap-1">
+                        {computeTime < 0.01 ? '< 0.01' : computeTime.toFixed(3)}
+                        <span className="text-xs text-slate-500">ms</span>
+                    </div>
+                </div>
+                <div className="bg-slate-800 p-2 rounded border border-slate-700">
+                    <div className="text-[10px] text-slate-500 uppercase font-semibold">Operations</div>
+                    <div className="text-lg font-mono text-white flex items-baseline gap-1">
+                        {steps.length}
+                        <span className="text-xs text-slate-500">steps</span>
+                    </div>
+                </div>
+            </div>
+
+            {/* Target Specific Metrics */}
+            {endNode && (
+                <div className="bg-purple-900/20 p-3 rounded border border-purple-500/30 animate-in fade-in duration-300">
+                     <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-1 text-purple-300 text-xs font-semibold uppercase">
+                            <Flag size={12} />
+                            Target Path ({endNode})
+                        </div>
+                        <div className="font-mono font-bold text-white text-lg">
+                            {shortestPathData.cost} <span className="text-xs font-normal text-slate-400">cost</span>
+                        </div>
+                     </div>
+                     <div className="text-xs text-purple-200/70 font-mono break-words">
+                        {shortestPathData.pathString || "Calculating..."}
+                     </div>
+                </div>
+            )}
+        </div>
+
         {/* Log / Step Description */}
-        <div className="p-6 border-b border-slate-800 bg-slate-800/30">
+        <div className="p-6 border-b border-slate-800 bg-slate-800/30 flex-shrink-0">
             <div className="flex items-center gap-2 mb-2 text-blue-400">
                 <Terminal size={18} />
                 <h2 className="font-semibold text-sm uppercase tracking-wider">Simulation Log</h2>
             </div>
-            <div className="h-24 overflow-y-auto pr-2 text-sm text-slate-300 font-mono leading-relaxed custom-scrollbar">
+            <div className="h-20 overflow-y-auto pr-2 text-sm text-slate-300 font-mono leading-relaxed custom-scrollbar">
                 {currentStep ? (
                     <p className="animate-in fade-in slide-in-from-bottom-2 duration-300">
                         <span className="text-slate-500 mr-2">[{currentStep.stepIndex}]</span>
@@ -337,7 +418,7 @@ const App: React.FC = () => {
         </div>
 
         {/* Routing Table */}
-        <div className="flex-1 p-6 overflow-hidden flex flex-col">
+        <div className="flex-1 p-6 overflow-hidden flex flex-col min-h-0">
              <div className="flex items-center gap-2 mb-4 text-purple-400">
                 <Info size={18} />
                 <h2 className="font-semibold text-sm uppercase tracking-wider">
